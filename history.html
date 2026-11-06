@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+{% block title %}History – NutriSmart{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>📅 Nutrition History</h1>
+    <p class="page-sub">Your weekly calorie & macro trends</p>
+</div>
+
+<!-- Date picker -->
+<div class="card">
+    <div class="card-header-row">
+        <h3>Browse by Date</h3>
+        <input type="date" id="datePicker" class="input-field input-sm" style="width:auto">
+    </div>
+
+    <div id="dayLogs" style="margin-top:1rem">
+        <div class="empty-state"><div class="empty-icon">📅</div><p>Select a date to view logs.</p></div>
+    </div>
+</div>
+
+<!-- Weekly chart -->
+<div class="card">
+    <h3>Last 7 Days – Calorie Trend</h3>
+    <div id="weekChart" class="week-chart"></div>
+</div>
+
+<!-- Weekly macros -->
+<div class="card">
+    <h3>Weekly Summary</h3>
+    <div id="weekSummary" class="week-summary-grid"></div>
+</div>
+
+<script>
+loadWeekData();
+
+document.getElementById('datePicker').addEventListener('change', function(){
+    loadDayLogs(this.value);
+});
+
+async function loadDayLogs(d){
+    const res = await fetch(`/api/logs?date=${d}`);
+    const logs = await res.json();
+    const el = document.getElementById('dayLogs');
+    if (!logs.length){
+        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🍽️</div><p>No food logged on this date.</p></div>';
+        return;
+    }
+
+    const meals = {};
+    logs.forEach(l => { if (!meals[l.meal_type]) meals[l.meal_type] = []; meals[l.meal_type].push(l); });
+
+    let html = '';
+    let totalCal = 0;
+    Object.entries(meals).forEach(([meal, items]) => {
+        html += `<div class="meal-section"><div class="meal-title">${mealEmoji(meal)} ${meal.charAt(0).toUpperCase()+meal.slice(1)}</div><div class="log-list">`;
+        items.forEach(log => {
+            const r = log.quantity_g/100;
+            const cal = Math.round(log.calories_per_100g*r);
+            totalCal += cal;
+            html += `<div class="log-item">
+                <div class="log-info"><span class="log-name">${log.food_name}</span><span class="log-qty">${log.quantity_g}g</span></div>
+                <div class="log-macros">
+                    <span class="tag-cal">${cal} kcal</span>
+                    <span class="tag">P ${(log.protein_per_100g*r).toFixed(1)}g</span>
+                    <span class="tag">C ${(log.carbs_per_100g*r).toFixed(1)}g</span>
+                    <span class="tag">F ${(log.fat_per_100g*r).toFixed(1)}g</span>
+                </div>
+            </div>`;
+        });
+        html += '</div></div>';
+    });
+
+    html += `<div class="log-total-row"><strong>Total: ${totalCal} kcal</strong></div>`;
+    el.innerHTML = html;
+}
+
+async function loadWeekData(){
+    const res = await fetch('/api/logs/week');
+    const rows = await res.json();
+    renderWeekChart(rows);
+    renderWeekSummary(rows);
+}
+
+function renderWeekChart(rows){
+    const el = document.getElementById('weekChart');
+    if (!rows.length){ el.innerHTML = '<p style="color:#94a3b8;text-align:center">No data for this week.</p>'; return; }
+    const maxCal = Math.max(...rows.map(r=>r.total_cal), 1);
+    el.innerHTML = rows.map(r => {
+        const pct = Math.min(r.total_cal/maxCal*100, 100).toFixed(1);
+        const cal = Math.round(r.total_cal);
+        const day = new Date(r.log_date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+        return `<div class="chart-bar-col">
+            <div class="chart-bar-label">${cal}</div>
+            <div class="chart-bar-track">
+                <div class="chart-bar-fill" style="height:${pct}%"></div>
+            </div>
+            <div class="chart-bar-day">${day}</div>
+        </div>`;
+    }).join('');
+}
+
+function renderWeekSummary(rows){
+    const el = document.getElementById('weekSummary');
+    if (!rows.length){ el.innerHTML=''; return; }
+    const avg = (key) => (rows.reduce((s,r)=>s+r[key],0)/rows.length).toFixed(1);
+    el.innerHTML = `
+        <div class="wsb"><div class="wsb-val">${Math.round(avg('total_cal'))}</div><div class="wsb-label">Avg Calories/day</div></div>
+        <div class="wsb"><div class="wsb-val">${avg('total_protein')}g</div><div class="wsb-label">Avg Protein/day</div></div>
+        <div class="wsb"><div class="wsb-val">${avg('total_carbs')}g</div><div class="wsb-label">Avg Carbs/day</div></div>
+        <div class="wsb"><div class="wsb-val">${avg('total_fat')}g</div><div class="wsb-label">Avg Fat/day</div></div>
+        <div class="wsb"><div class="wsb-val">${rows.length}</div><div class="wsb-label">Days logged</div></div>
+    `;
+}
+
+function mealEmoji(m){ return {breakfast:'🌅',lunch:'☀️',dinner:'🌙',snack:'🍎'}[m]||'🍽️'; }
+</script>
+{% endblock %}

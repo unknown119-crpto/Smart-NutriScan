@@ -1,0 +1,210 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard – NutriSmart{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>Good day, {{ user['name'].split()[0] }}! 👋</h1>
+    <p class="page-sub">{{ today }} · Daily Nutrition Overview</p>
+</div>
+
+<!-- Calorie Ring + Macros -->
+<div class="summary-grid">
+    <div class="card card-calorie">
+        <h3>Calories Today</h3>
+        <div class="ring-wrapper">
+            <svg class="ring" viewBox="0 0 120 120">
+                <circle class="ring-bg" cx="60" cy="60" r="50"/>
+                {% set pct = [totals.calories / user['daily_calorie_goal'], 1.0]|min %}
+                <circle class="ring-fill {% if pct > 0.9 %}ring-warn{% endif %}"
+                        cx="60" cy="60" r="50"
+                        stroke-dasharray="{{ (pct * 314.16)|round }} 314.16"/>
+            </svg>
+            <div class="ring-label">
+                <span class="ring-num">{{ totals.calories }}</span>
+                <span class="ring-unit">/ {{ user['daily_calorie_goal'] }} kcal</span>
+            </div>
+        </div>
+        {% set remaining = user['daily_calorie_goal'] - totals.calories %}
+        <p class="cal-remaining {% if remaining < 0 %}over{% endif %}">
+            {% if remaining >= 0 %}{{ remaining }} kcal remaining{% else %}{{ (-remaining)|int }} kcal over goal{% endif %}
+        </p>
+    </div>
+
+    <div class="card macro-card">
+        <h3>Macronutrients</h3>
+        <div class="macro-bars">
+            {% set macros = [
+                ('Protein', totals.protein, 50, '#6366f1'),
+                ('Carbs',   totals.carbs,   250, '#f59e0b'),
+                ('Fat',     totals.fat,     65,  '#10b981'),
+                ('Fiber',   totals.fiber,   25,  '#3b82f6')
+            ] %}
+            {% for label, val, goal, color in macros %}
+            <div class="macro-row">
+                <div class="macro-label">
+                    <span>{{ label }}</span>
+                    <span>{{ val }}g / {{ goal }}g</span>
+                </div>
+                <div class="macro-bar-bg">
+                    <div class="macro-bar-fill" style="width:{{ [val/goal*100,100]|min|round }}%; background:{{ color }}"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Quick Add -->
+<div class="card">
+    <div class="card-header-row">
+        <h3>Quick Add Food</h3>
+        <a href="{{ url_for('analyze') }}" class="btn-sm">Full Analyzer →</a>
+    </div>
+    <div class="quick-add-row">
+        <input type="text" id="quickSearch" placeholder="Search food (e.g. apple, chicken)…" class="input-field">
+        <select id="mealType" class="input-field input-sm">
+            <option value="breakfast">🌅 Breakfast</option>
+            <option value="lunch" selected>☀️ Lunch</option>
+            <option value="dinner">🌙 Dinner</option>
+            <option value="snack">🍎 Snack</option>
+        </select>
+    </div>
+    <div id="searchResults" class="search-dropdown hidden"></div>
+    <div id="selectedFood" class="selected-food hidden">
+        <div class="selected-food-row">
+            <span id="selectedName" class="selected-name"></span>
+            <div class="qty-row">
+                <label>Grams:</label>
+                <input type="number" id="qtyGrams" value="100" min="1" max="2000" class="input-sm input-qty">
+                <button class="btn-primary" onclick="logSelectedFood()">Log Food</button>
+            </div>
+        </div>
+        <div id="selectedMacros" class="macro-preview"></div>
+    </div>
+</div>
+
+<!-- Today's Log -->
+<div class="card">
+    <h3>Today's Food Log</h3>
+    {% if logs %}
+    {% set meal_order = ['breakfast','lunch','dinner','snack'] %}
+    {% for meal in meal_order %}
+    {% set meal_logs = logs|selectattr('meal_type','equalto',meal)|list %}
+    {% if meal_logs %}
+    <div class="meal-section">
+        <div class="meal-title">
+            {% if meal == 'breakfast' %}🌅{% elif meal == 'lunch' %}☀️{% elif meal == 'dinner' %}🌙{% else %}🍎{% endif %}
+            {{ meal.title() }}
+        </div>
+        <div class="log-list">
+            {% for log in meal_logs %}
+            {% set ratio = log['quantity_g'] / 100.0 %}
+            <div class="log-item" id="log-{{ log['id'] }}">
+                <div class="log-info">
+                    <span class="log-name">{{ log['name'] }}</span>
+                    <span class="log-qty">{{ log['quantity_g']|int }}g</span>
+                </div>
+                <div class="log-macros">
+                    <span class="tag-cal">{{ (log['calories_per_100g'] * ratio)|round|int }} kcal</span>
+                    <span class="tag">P {{ (log['protein_per_100g'] * ratio)|round(1) }}g</span>
+                    <span class="tag">C {{ (log['carbs_per_100g'] * ratio)|round(1) }}g</span>
+                    <span class="tag">F {{ (log['fat_per_100g'] * ratio)|round(1) }}g</span>
+                </div>
+                <button class="btn-delete" onclick="deleteLog({{ log['id'] }})">✕</button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-icon">🍽️</div>
+        <p>No food logged today. Start by adding a meal above!</p>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+let selectedFoodId = null;
+let selectedFoodData = null;
+
+document.getElementById('quickSearch').addEventListener('input', debounce(async function(){
+    const q = this.value.trim();
+    if (q.length < 2) { hideDropdown(); return; }
+    const res = await fetch(`/api/foods/search?q=${encodeURIComponent(q)}`);
+    const foods = await res.json();
+    renderDropdown(foods);
+}, 300));
+
+function renderDropdown(foods){
+    const el = document.getElementById('searchResults');
+    if (!foods.length) { el.classList.add('hidden'); return; }
+    el.innerHTML = foods.slice(0,8).map(f => `
+        <div class="dropdown-item" onclick="selectFood(${f.id},'${escHtml(f.name)}',${f.calories},${f.protein},${f.carbs},${f.fat})">
+            <span class="di-name">${escHtml(f.name)}</span>
+            <span class="di-cal">${f.calories} kcal/100g · ${f.category}</span>
+        </div>`).join('');
+    el.classList.remove('hidden');
+}
+
+function selectFood(id, name, cal, prot, carbs, fat){
+    selectedFoodId = id;
+    selectedFoodData = {cal, prot, carbs, fat};
+    document.getElementById('selectedName').textContent = name;
+    document.getElementById('selectedFood').classList.remove('hidden');
+    document.getElementById('searchResults').classList.add('hidden');
+    document.getElementById('quickSearch').value = name;
+    updateMacroPreview();
+}
+
+function updateMacroPreview(){
+    if (!selectedFoodData) return;
+    const g = parseFloat(document.getElementById('qtyGrams').value) || 100;
+    const r = g/100;
+    document.getElementById('selectedMacros').innerHTML =
+        `<span class="tag-cal">${Math.round(selectedFoodData.cal*r)} kcal</span>
+         <span class="tag">Protein ${(selectedFoodData.prot*r).toFixed(1)}g</span>
+         <span class="tag">Carbs ${(selectedFoodData.carbs*r).toFixed(1)}g</span>
+         <span class="tag">Fat ${(selectedFoodData.fat*r).toFixed(1)}g</span>`;
+}
+
+document.getElementById('qtyGrams').addEventListener('input', updateMacroPreview);
+
+async function logSelectedFood(){
+    if (!selectedFoodId) return;
+    const qty = parseFloat(document.getElementById('qtyGrams').value);
+    const meal = document.getElementById('mealType').value;
+    const res = await fetch('/api/log', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({food_id: selectedFoodId, quantity_g: qty, meal_type: meal})
+    });
+    const data = await res.json();
+    if (data.success) { window.location.reload(); }
+    else { alert('Error logging food.'); }
+}
+
+async function deleteLog(id){
+    if (!confirm('Remove this entry?')) return;
+    await fetch(`/api/log/${id}`, {method:'DELETE'});
+    document.getElementById(`log-${id}`).remove();
+    // Reload to update totals
+    setTimeout(() => window.location.reload(), 300);
+}
+
+function hideDropdown(){
+    document.getElementById('searchResults').classList.add('hidden');
+}
+
+function debounce(fn, ms){
+    let t; return function(...a){ clearTimeout(t); t = setTimeout(()=>fn.apply(this,a), ms); };
+}
+
+function escHtml(s){ return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+document.addEventListener('click', function(e){
+    if (!e.target.closest('#quickSearch') && !e.target.closest('#searchResults')) hideDropdown();
+});
+</script>
+{% endblock %}

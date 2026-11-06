@@ -1,0 +1,366 @@
+{% extends 'base.html' %}
+{% block title %}Analyze Food – NutriSmart{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>🔍 Nutrition Analyzer</h1>
+    <p class="page-sub">Build a meal and get a detailed breakdown</p>
+</div>
+
+<div class="analyze-layout">
+
+    <!-- Left: Food Builder -->
+    <div class="analyze-left">
+        <div class="card">
+            <h3>Build Your Meal</h3>
+
+            <!-- Search -->
+            <div class="form-group">
+                <label>Search Food</label>
+                <input type="text" id="foodSearch" placeholder="e.g. apple, chicken breast…" class="input-field">
+                <div id="searchResults" class="search-dropdown hidden"></div>
+            </div>
+
+            <!-- Filter by category -->
+            <div class="form-group">
+                <label>Or browse by category</label>
+                <div class="category-pills">
+                    <button class="pill active" onclick="filterCat('')">All</button>
+                    {% for cat in categories %}
+                    <button class="pill" onclick="filterCat('{{ cat['category'] }}')">{{ cat['category'] }}</button>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Food list -->
+            <div id="foodList" class="food-list"></div>
+        </div>
+    </div>
+
+    <!-- Right: Meal & Results -->
+    <div class="analyze-right">
+
+        <!-- Meal items -->
+        <div class="card">
+            <div class="card-header-row">
+                <h3>Your Meal <span id="mealCount" class="badge">0 items</span></h3>
+                <button class="btn-sm" onclick="clearMeal()">Clear</button>
+            </div>
+            <div id="mealItems" class="meal-items">
+                <div class="empty-state" id="emptyMeal">
+                    <div class="empty-icon">🥗</div>
+                    <p>Add foods from the left to build your meal.</p>
+                </div>
+            </div>
+            <div id="mealActions" class="hidden" style="margin-top:1rem;">
+                <div class="form-row">
+                    <select id="logMealType" class="input-field">
+                        <option value="breakfast">🌅 Breakfast</option>
+                        <option value="lunch" selected>☀️ Lunch</option>
+                        <option value="dinner">🌙 Dinner</option>
+                        <option value="snack">🍎 Snack</option>
+                    </select>
+                    <button class="btn-primary" onclick="logMeal()">Log Meal to Diary</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analysis results -->
+        <div class="card" id="resultsCard" style="display:none">
+            <h3>📊 Nutrition Analysis</h3>
+            <div id="analysisResult"></div>
+        </div>
+
+        <!-- Analyze button -->
+        <button class="btn-primary btn-full btn-lg" id="analyzeBtn" onclick="analyzeMeal()" style="display:none">
+            Analyze Nutrition
+        </button>
+    </div>
+</div>
+
+<!-- Custom food modal -->
+<div class="modal-overlay hidden" id="customModal">
+    <div class="modal">
+        <h3>Add Custom Food</h3>
+        <p class="modal-sub">Values per 100g</p>
+        <div class="form-row">
+            <div class="form-group"><label>Name</label><input type="text" id="cName" class="input-field"></div>
+            <div class="form-group"><label>Category</label>
+                <select id="cCat" class="input-field">
+                    <option>Custom</option>
+                    <option>Fruits</option><option>Vegetables</option>
+                    <option>Proteins</option><option>Grains</option>
+                    <option>Dairy</option><option>Nuts &amp; Seeds</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Calories</label><input type="number" id="cCal" class="input-field" placeholder="0"></div>
+            <div class="form-group"><label>Protein (g)</label><input type="number" id="cPro" class="input-field" placeholder="0"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Carbs (g)</label><input type="number" id="cCarb" class="input-field" placeholder="0"></div>
+            <div class="form-group"><label>Fat (g)</label><input type="number" id="cFat" class="input-field" placeholder="0"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Fiber (g)</label><input type="number" id="cFib" class="input-field" placeholder="0"></div>
+            <div class="form-group"><label>Sodium (mg)</label><input type="number" id="cSod" class="input-field" placeholder="0"></div>
+        </div>
+        <div style="display:flex;gap:1rem;margin-top:1rem">
+            <button class="btn-primary" onclick="saveCustomFood()">Save Food</button>
+            <button class="btn-outline" onclick="closeCustomModal()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let meal = []; // [{food_id, name, quantity_g, calories, protein, carbs, fat, fiber}, ...]
+
+// Load all foods on start
+loadFoods();
+
+async function loadFoods(category=''){
+    const url = category ? `/api/foods/search?category=${encodeURIComponent(category)}` : '/api/foods/search';
+    const res = await fetch(url);
+    const foods = await res.json();
+    renderFoodList(foods);
+}
+
+function renderFoodList(foods){
+    const el = document.getElementById('foodList');
+    if (!foods.length){ el.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:1rem">No foods found.</p>'; return; }
+    el.innerHTML = foods.map(f => `
+        <div class="food-list-item" onclick="openAddModal(${JSON.stringify(f).replace(/"/g,'&quot;')})">
+            <div>
+                <div class="fli-name">${escHtml(f.name)}</div>
+                <div class="fli-cat">${f.category}</div>
+            </div>
+            <div class="fli-cal">${f.calories} kcal</div>
+        </div>
+    `).join('');
+}
+
+function filterCat(cat){
+    document.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
+    event.target.classList.add('active');
+    loadFoods(cat);
+}
+
+let currentFood = null;
+
+function openAddModal(food){
+    currentFood = food;
+    // Simple inline prompt using browser prompt
+    const grams = prompt(`Add "${food.name}"\nEnter amount in grams (default: ${food.serving_size}):`, food.serving_size);
+    if (grams === null) return;
+    const g = parseFloat(grams) || food.serving_size;
+    addToMeal(food, g);
+}
+
+function addToMeal(food, g){
+    const r = g/100;
+    const item = {
+        food_id: food.id,
+        name: food.name,
+        quantity_g: g,
+        calories: Math.round(food.calories*r),
+        protein: +(food.protein*r).toFixed(1),
+        carbs: +(food.carbs*r).toFixed(1),
+        fat: +(food.fat*r).toFixed(1),
+        fiber: +(food.fiber*r).toFixed(1)
+    };
+    meal.push(item);
+    renderMeal();
+}
+
+function renderMeal(){
+    const el = document.getElementById('mealItems');
+    const emptyEl = document.getElementById('emptyMeal');
+    const actionsEl = document.getElementById('mealActions');
+    const analyzBtn = document.getElementById('analyzeBtn');
+    document.getElementById('mealCount').textContent = `${meal.length} item${meal.length!==1?'s':''}`;
+
+    if (!meal.length){
+        el.innerHTML = '';
+        el.appendChild(emptyEl);
+        emptyEl.classList.remove('hidden');
+        actionsEl.classList.add('hidden');
+        analyzBtn.style.display = 'none';
+        document.getElementById('resultsCard').style.display = 'none';
+        return;
+    }
+
+    emptyEl.classList.add('hidden');
+    actionsEl.classList.remove('hidden');
+    analyzBtn.style.display = 'block';
+
+    el.innerHTML = meal.map((item,i) => `
+        <div class="meal-item-row">
+            <div class="mir-info">
+                <span class="mir-name">${escHtml(item.name)}</span>
+                <div class="mir-macros">
+                    <span class="tag-cal">${item.calories} kcal</span>
+                    <span class="tag">P ${item.protein}g</span>
+                    <span class="tag">C ${item.carbs}g</span>
+                    <span class="tag">F ${item.fat}g</span>
+                </div>
+            </div>
+            <div class="mir-controls">
+                <input type="number" class="input-qty" value="${item.quantity_g}"
+                    onchange="updateQty(${i}, this.value)" min="1" max="2000">
+                <span class="mir-unit">g</span>
+                <button class="btn-delete" onclick="removeItem(${i})">✕</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateQty(i, val){
+    const g = parseFloat(val) || 100;
+    const food_id = meal[i].food_id;
+    fetch(`/api/foods/${food_id}`).then(r=>r.json()).then(food=>{
+        const r = g/100;
+        meal[i].quantity_g = g;
+        meal[i].calories = Math.round(food.calories*r);
+        meal[i].protein = +(food.protein*r).toFixed(1);
+        meal[i].carbs = +(food.carbs*r).toFixed(1);
+        meal[i].fat = +(food.fat*r).toFixed(1);
+        meal[i].fiber = +(food.fiber*r).toFixed(1);
+    });
+}
+
+function removeItem(i){ meal.splice(i,1); renderMeal(); }
+
+function clearMeal(){ meal=[]; renderMeal(); }
+
+async function analyzeMeal(){
+    if (!meal.length) return;
+    const payload = meal.map(m => ({food_id: m.food_id, quantity_g: m.quantity_g}));
+    const res = await fetch('/api/analyze', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({foods: payload})
+    });
+    const data = await res.json();
+    renderAnalysis(data);
+}
+
+function renderAnalysis(d){
+    const card = document.getElementById('resultsCard');
+    card.style.display = 'block';
+    card.scrollIntoView({behavior:'smooth'});
+
+    const totalMacroG = d.protein + d.carbs + d.fat;
+    const pPct = totalMacroG ? Math.round(d.protein*4/((d.protein*4+d.carbs*4+d.fat*9))*100) : 0;
+    const cPct = totalMacroG ? Math.round(d.carbs*4/((d.protein*4+d.carbs*4+d.fat*9))*100) : 0;
+    const fPct = totalMacroG ? Math.round(d.fat*9/((d.protein*4+d.carbs*4+d.fat*9))*100) : 0;
+
+    const html = `
+        <div class="analysis-calorie">${d.calories} <span>kcal total</span></div>
+
+        <div class="analysis-macro-grid">
+            <div class="amg-item" style="border-color:#6366f1">
+                <div class="amg-val">${d.protein}g</div>
+                <div class="amg-label">Protein</div>
+                <div class="amg-pct">${pPct}% cals</div>
+            </div>
+            <div class="amg-item" style="border-color:#f59e0b">
+                <div class="amg-val">${d.carbs}g</div>
+                <div class="amg-label">Carbs</div>
+                <div class="amg-pct">${cPct}% cals</div>
+            </div>
+            <div class="amg-item" style="border-color:#10b981">
+                <div class="amg-val">${d.fat}g</div>
+                <div class="amg-label">Fat</div>
+                <div class="amg-pct">${fPct}% cals</div>
+            </div>
+            <div class="amg-item" style="border-color:#3b82f6">
+                <div class="amg-val">${d.fiber}g</div>
+                <div class="amg-label">Fiber</div>
+                <div class="amg-pct">&nbsp;</div>
+            </div>
+        </div>
+
+        <!-- Macro ratio bar -->
+        <div style="margin:1rem 0">
+            <div style="display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px">
+                <div style="width:${pPct}%;background:#6366f1;border-radius:6px 0 0 6px"></div>
+                <div style="width:${cPct}%;background:#f59e0b"></div>
+                <div style="width:${fPct}%;background:#10b981;border-radius:0 6px 6px 0"></div>
+            </div>
+            <div style="display:flex;gap:1rem;margin-top:.4rem;font-size:.75rem;color:#94a3b8">
+                <span>🟣 Protein ${pPct}%</span>
+                <span>🟡 Carbs ${cPct}%</span>
+                <span>🟢 Fat ${fPct}%</span>
+            </div>
+        </div>
+
+        <div class="detail-row"><span>Sugar</span><span>${d.sugar}g</span></div>
+        <div class="detail-row"><span>Sodium</span><span>${d.sodium}mg</span></div>
+
+        ${d.warnings.length ? `<div class="warn-box">${d.warnings.join('<br>')}</div>` : ''}
+        ${d.tips.length ? `<div class="tip-box">${d.tips.join('<br>')}</div>` : ''}
+    `;
+    document.getElementById('analysisResult').innerHTML = html;
+}
+
+async function logMeal(){
+    if (!meal.length){ alert('Add foods first!'); return; }
+    const mealType = document.getElementById('logMealType').value;
+    for (const item of meal){
+        await fetch('/api/log', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({food_id: item.food_id, quantity_g: item.quantity_g, meal_type: mealType})
+        });
+    }
+    alert(`✅ ${meal.length} item(s) logged to ${mealType}!`);
+    meal = [];
+    renderMeal();
+}
+
+// Search
+document.getElementById('foodSearch').addEventListener('input', debounce(async function(){
+    const q = this.value.trim();
+    if (q.length < 2){ document.getElementById('searchResults').classList.add('hidden'); return; }
+    const res = await fetch(`/api/foods/search?q=${encodeURIComponent(q)}`);
+    const foods = await res.json();
+    const el = document.getElementById('searchResults');
+    if (!foods.length){ el.classList.add('hidden'); return; }
+    el.innerHTML = foods.slice(0,8).map(f=>`
+        <div class="dropdown-item" onclick="addToMeal(${JSON.stringify(f).replace(/"/g,'&quot;')},${f.serving_size});document.getElementById('searchResults').classList.add('hidden');">
+            <span class="di-name">${escHtml(f.name)}</span>
+            <span class="di-cal">${f.calories} kcal · ${f.category}</span>
+        </div>`).join('');
+    el.classList.remove('hidden');
+}, 300));
+
+document.addEventListener('click', e=>{
+    if (!e.target.closest('#foodSearch') && !e.target.closest('#searchResults'))
+        document.getElementById('searchResults').classList.add('hidden');
+});
+
+function openCustomModal(){ document.getElementById('customModal').classList.remove('hidden'); }
+function closeCustomModal(){ document.getElementById('customModal').classList.add('hidden'); }
+
+async function saveCustomFood(){
+    const food = {
+        name: document.getElementById('cName').value,
+        category: document.getElementById('cCat').value,
+        calories: parseFloat(document.getElementById('cCal').value)||0,
+        protein: parseFloat(document.getElementById('cPro').value)||0,
+        carbs: parseFloat(document.getElementById('cCarb').value)||0,
+        fat: parseFloat(document.getElementById('cFat').value)||0,
+        fiber: parseFloat(document.getElementById('cFib').value)||0,
+        sodium: parseFloat(document.getElementById('cSod').value)||0,
+    };
+    if (!food.name){ alert('Food name is required.'); return; }
+    await fetch('/api/foods/add', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(food)});
+    closeCustomModal();
+    loadFoods();
+}
+
+function debounce(fn,ms){ let t; return function(...a){ clearTimeout(t); t=setTimeout(()=>fn.apply(this,a),ms); }; }
+function escHtml(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
+{% endblock %}

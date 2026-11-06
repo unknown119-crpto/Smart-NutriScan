@@ -1,0 +1,136 @@
+{% extends 'base.html' %}
+{% block title %}Profile – NutriSmart{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>👤 My Profile</h1>
+    <p class="page-sub">Manage your health settings and calorie goals</p>
+</div>
+
+<div class="profile-layout">
+
+    <!-- Profile card -->
+    <div class="card profile-card">
+        <div class="profile-avatar">{{ user['name'][0].upper() }}</div>
+        <h2>{{ user['name'] }}</h2>
+        <p class="profile-email">{{ user['email'] }}</p>
+        <div class="profile-stats">
+            <div class="ps-item"><span class="ps-val">{{ user['age'] }}</span><span class="ps-label">Age</span></div>
+            <div class="ps-item"><span class="ps-val">{{ user['weight_kg'] }}kg</span><span class="ps-label">Weight</span></div>
+            <div class="ps-item"><span class="ps-val">{{ user['height_cm'] }}cm</span><span class="ps-label">Height</span></div>
+        </div>
+
+        {% set bmi = user['weight_kg'] / ((user['height_cm']/100) ** 2) %}
+        <div class="bmi-card">
+            <div class="bmi-val">{{ '%.1f'|format(bmi) }}</div>
+            <div class="bmi-label">BMI –
+                {% if bmi < 18.5 %}Underweight
+                {% elif bmi < 25 %}Normal weight
+                {% elif bmi < 30 %}Overweight
+                {% else %}Obese{% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit form -->
+    <div>
+        <div class="card">
+            <h3>Update Health Settings</h3>
+            <div id="profileMsg" class="alert hidden"></div>
+            <form id="profileForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Weight (kg)</label>
+                        <input type="number" id="weight" value="{{ user['weight_kg'] }}" step="0.5" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label>Height (cm)</label>
+                        <input type="number" id="height" value="{{ user['height_cm'] }}" class="input-field">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Age</label>
+                        <input type="number" id="age" value="{{ user['age'] }}" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label>Gender</label>
+                        <select id="gender" class="input-field">
+                            <option value="male" {% if user['gender']=='male' %}selected{% endif %}>Male</option>
+                            <option value="female" {% if user['gender']=='female' %}selected{% endif %}>Female</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Activity Level</label>
+                    <select id="activity" class="input-field">
+                        {% for val, label in [
+                            ('sedentary','Sedentary (desk job, no exercise)'),
+                            ('light','Light (1-3x exercise/week)'),
+                            ('moderate','Moderate (3-5x exercise/week)'),
+                            ('active','Active (6-7x exercise/week)'),
+                            ('very_active','Very Active (athlete / physical job)')
+                        ] %}
+                        <option value="{{ val }}" {% if user['activity_level']==val %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Daily Calorie Goal (kcal)</label>
+                    <input type="number" id="goalCal" value="{{ user['daily_calorie_goal'] }}" class="input-field">
+                    <small class="input-hint">Leave as calculated TDEE, or set a custom goal.</small>
+                </div>
+                <button type="submit" class="btn-primary">Save Changes</button>
+            </form>
+        </div>
+
+        <!-- TDEE reference -->
+        <div class="card">
+            <h3>📐 TDEE Reference</h3>
+            {% set bmr_m = 10*user['weight_kg'] + 6.25*user['height_cm'] - 5*user['age'] + 5 %}
+            {% set bmr_f = 10*user['weight_kg'] + 6.25*user['height_cm'] - 5*user['age'] - 161 %}
+            {% set mults = {'sedentary':1.2,'light':1.375,'moderate':1.55,'active':1.725,'very_active':1.9} %}
+            {% set mult = mults.get(user['activity_level'], 1.55) %}
+            {% set bmr = bmr_m if user['gender']=='male' else bmr_f %}
+            {% set tdee = (bmr * mult)|round|int %}
+
+            <div class="tdee-grid">
+                <div class="tdee-item"><div class="tdee-val">{{ bmr|round|int }}</div><div class="tdee-label">BMR (base)</div></div>
+                <div class="tdee-item"><div class="tdee-val">{{ tdee }}</div><div class="tdee-label">TDEE (maintenance)</div></div>
+                <div class="tdee-item"><div class="tdee-val">{{ tdee - 500 }}</div><div class="tdee-label">Fat loss (–500)</div></div>
+                <div class="tdee-item"><div class="tdee-val">{{ tdee + 300 }}</div><div class="tdee-label">Muscle gain (+300)</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('profileForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const btn = this.querySelector('button[type=submit]');
+    btn.textContent = 'Saving…'; btn.disabled = true;
+    const res = await fetch('/api/profile', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            weight_kg: document.getElementById('weight').value,
+            height_cm: document.getElementById('height').value,
+            age: document.getElementById('age').value,
+            gender: document.getElementById('gender').value,
+            activity_level: document.getElementById('activity').value,
+            daily_calorie_goal: document.getElementById('goalCal').value
+        })
+    });
+    const data = await res.json();
+    const msg = document.getElementById('profileMsg');
+    if (data.success){
+        msg.textContent = '✅ Profile updated successfully!';
+        msg.className = 'alert success';
+        setTimeout(()=>window.location.reload(), 1500);
+    } else {
+        msg.textContent = '❌ Error updating profile.';
+        msg.className = 'alert error';
+    }
+    btn.textContent = 'Save Changes'; btn.disabled = false;
+});
+</script>
+{% endblock %}
